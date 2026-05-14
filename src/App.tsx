@@ -87,7 +87,36 @@ const defaultCurrentEmotions: EmotionNode[] = [
   { id: 'ce-3', text: '犹豫', x: 83, y: 50 },
 ];
 
-const STORAGE_KEY = 'journey-map-data-v2';
+type RowHeaders = {
+  stages: string;
+  behaviors: string;
+  idealEmotions: string;
+  problems: string;
+  touchpoints: string;
+  currentEmotions: string;
+};
+
+const defaultRowHeaders: RowHeaders = {
+  stages: "交互链路",
+  behaviors: "操作行为",
+  idealEmotions: "理想\n用户情绪",
+  problems: "问题\n梳理",
+  touchpoints: "触点\n现状",
+  currentEmotions: "现状\n用户情绪"
+};
+
+type JourneyMap = {
+  id: string;
+  title: string;
+  steps: Step[];
+  idealEmotions: EmotionNode[];
+  currentEmotions: EmotionNode[];
+  rowHeaders: RowHeaders;
+  createdAt: number;
+  updatedAt: number;
+};
+
+const STORAGE_KEY = 'journey-maps-v3';
 
 const EmotionGraph = ({ nodes, setNodes, type }: { nodes: EmotionNode[], setNodes: (nodes: EmotionNode[]) => void, type: 'ideal' | 'current' }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -191,41 +220,121 @@ const EmotionGraph = ({ nodes, setNodes, type }: { nodes: EmotionNode[], setNode
 };
 
 export default function App() {
+  const [maps, setMaps] = useState<JourneyMap[]>([]);
+  const [currentMapId, setCurrentMapId] = useState<string | null>(null);
+  
+  // Current map state
   const [title, setTitle] = useState("用户体验旅程地图");
-  const [steps, setSteps] = useState<Step[]>([]);
-  const [idealEmotions, setIdealEmotions] = useState<EmotionNode[]>([]);
-  const [currentEmotions, setCurrentEmotions] = useState<EmotionNode[]>([]);
+  const [steps, setSteps] = useState<Step[]>(defaultSteps);
+  const [idealEmotions, setIdealEmotions] = useState<EmotionNode[]>(defaultIdealEmotions);
+  const [currentEmotions, setCurrentEmotions] = useState<EmotionNode[]>(defaultCurrentEmotions);
+  const [rowHeaders, setRowHeaders] = useState<RowHeaders>(defaultRowHeaders);
+  
   const [isLoaded, setIsLoaded] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [showMapSelector, setShowMapSelector] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        setTitle(parsed.title || "用户体验旅程地图");
-        setSteps(parsed.steps || defaultSteps);
-        setIdealEmotions(parsed.idealEmotions || defaultIdealEmotions);
-        setCurrentEmotions(parsed.currentEmotions || defaultCurrentEmotions);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // It's the new array format
+          setMaps(parsed);
+          loadMap(parsed[0]);
+        } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          // Migrate old single map format to new array format
+          const migratedMap: JourneyMap = {
+            id: `map-${Date.now()}`,
+            title: parsed.title || "用户体验旅程地图",
+            steps: parsed.steps || defaultSteps,
+            idealEmotions: parsed.idealEmotions || defaultIdealEmotions,
+            currentEmotions: parsed.currentEmotions || defaultCurrentEmotions,
+            rowHeaders: parsed.rowHeaders || defaultRowHeaders,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+          };
+          setMaps([migratedMap]);
+          loadMap(migratedMap);
+        } else {
+          createNewMap();
+        }
       } catch (e) {
         console.error("Failed to parse saved data", e);
-        setSteps(defaultSteps);
-        setIdealEmotions(defaultIdealEmotions);
-        setCurrentEmotions(defaultCurrentEmotions);
+        createNewMap();
       }
     } else {
-      setSteps(defaultSteps);
-      setIdealEmotions(defaultIdealEmotions);
-      setCurrentEmotions(defaultCurrentEmotions);
+      createNewMap();
     }
     setIsLoaded(true);
   }, []);
 
-  useEffect(() => {
-    if (isLoaded) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ title, steps, idealEmotions, currentEmotions }));
+  const loadMap = (map: JourneyMap) => {
+    setCurrentMapId(map.id);
+    setTitle(map.title);
+    setSteps(map.steps);
+    setIdealEmotions(map.idealEmotions);
+    setCurrentEmotions(map.currentEmotions);
+    setRowHeaders(map.rowHeaders);
+    setShowMapSelector(false);
+  };
+
+  const createNewMap = () => {
+    const newMap: JourneyMap = {
+      id: `map-${Date.now()}`,
+      title: `新旅程地图 ${maps.length + 1}`,
+      steps: defaultSteps,
+      idealEmotions: defaultIdealEmotions,
+      currentEmotions: defaultCurrentEmotions,
+      rowHeaders: defaultRowHeaders,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    setMaps([...maps, newMap]);
+    loadMap(newMap);
+  };
+
+  const deleteMap = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (maps.length <= 1) {
+      alert("至少需要保留一个旅程地图！");
+      return;
     }
-  }, [title, steps, idealEmotions, currentEmotions, isLoaded]);
+    if (confirm("确定要删除这个旅程地图吗？此操作不可恢复。")) {
+      const updatedMaps = maps.filter(m => m.id !== id);
+      setMaps(updatedMaps);
+      if (currentMapId === id) {
+        loadMap(updatedMaps[0]);
+      }
+    }
+  };
+
+  // Sync current state to the active map and save to localStorage
+  useEffect(() => {
+    if (isLoaded && currentMapId) {
+      const updatedMaps = maps.map(m => {
+        if (m.id === currentMapId) {
+          return {
+            ...m,
+            title,
+            steps,
+            idealEmotions,
+            currentEmotions,
+            rowHeaders,
+            updatedAt: Date.now()
+          };
+        }
+        return m;
+      });
+      // Only setMaps if there's actual data change to avoid infinite loops, 
+      // but we write to localStorage directly here for performance
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedMaps));
+      
+      // Update memory state silently if needed (React will batch this)
+      setMaps(updatedMaps);
+    }
+  }, [title, steps, idealEmotions, currentEmotions, rowHeaders, isLoaded, currentMapId]);
 
   const groupedStages = steps.reduce((acc, step, index) => {
     const last = acc[acc.length - 1];
@@ -350,8 +459,75 @@ export default function App() {
     <div className="flex flex-col h-screen bg-slate-50 font-sans text-slate-800">
       <header className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200 shadow-sm z-10 relative">
         <div className="flex items-center gap-4 w-1/2">
-          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-md flex-shrink-0">
-            JM
+          <div className="relative">
+            <div 
+              className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden bg-white border border-slate-200 shadow-sm cursor-pointer hover:border-indigo-400 transition-colors tooltip"
+              onClick={() => setShowMapSelector(!showMapSelector)}
+              title="切换旅程地图"
+            >
+              <img 
+                src="/logo.png" 
+                alt="Logo" 
+                className="w-full h-full object-contain" 
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                  const parent = e.currentTarget.parentElement;
+                  if (parent) {
+                    parent.innerHTML = '<div class="text-[10px] text-slate-400 text-center font-bold">切 换<br/>视 图</div>';
+                  }
+                }}
+              />
+            </div>
+            
+            {showMapSelector && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowMapSelector(false)} />
+                <div className="absolute top-14 left-0 w-80 bg-white rounded-xl shadow-xl border border-slate-100 z-50 p-2 transform origin-top-left flex flex-col max-h-[70vh]">
+                  <div className="p-3 border-b border-slate-100 flex items-center justify-between">
+                    <h3 className="font-bold text-slate-700">我的旅程地图 ({maps.length})</h3>
+                    <button 
+                      onClick={createNewMap}
+                      className="text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1"
+                    >
+                      <Plus size={14} /> 新建
+                    </button>
+                  </div>
+                  <div className="overflow-y-auto flex-1 p-2 space-y-1 custom-scrollbar">
+                    {maps.sort((a, b) => b.updatedAt - a.updatedAt).map(map => (
+                      <div 
+                        key={map.id}
+                        onClick={() => loadMap(map)}
+                        className={`p-3 rounded-lg flex items-center justify-between cursor-pointer group ${
+                          currentMapId === map.id 
+                            ? 'bg-indigo-50 border border-indigo-100 shadow-sm' 
+                            : 'hover:bg-slate-50 border border-transparent'
+                        }`}
+                      >
+                        <div className="flex flex-col overflow-hidden pr-2">
+                          <span className={`font-medium truncate ${currentMapId === map.id ? 'text-indigo-700' : 'text-slate-700'}`}>
+                            {map.title || '未命名'}
+                          </span>
+                          <span className="text-[10px] text-slate-400 mt-1">
+                            {new Date(map.updatedAt).toLocaleString(undefined, {
+                              year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit'
+                            })}
+                          </span>
+                        </div>
+                        {maps.length > 1 && (
+                          <button 
+                            onClick={(e) => deleteMap(map.id, e)}
+                            className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+                            title="删除"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
           <input
             value={title}
@@ -370,6 +546,7 @@ export default function App() {
               setSteps(defaultSteps);
               setIdealEmotions(defaultIdealEmotions);
               setCurrentEmotions(defaultCurrentEmotions);
+              setRowHeaders(defaultRowHeaders);
               setTitle("用户体验旅程地图");
             }
           }} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors">
@@ -384,8 +561,13 @@ export default function App() {
           <div className="grid gap-4" style={{ gridTemplateColumns }}>
             
             {/* Row 1: Stages */}
-            <div className="bg-slate-100 border border-slate-200 flex items-center justify-center font-bold rounded-xl p-3 text-center text-slate-700 shadow-sm">
-              交互链路
+            <div className="bg-slate-100 border border-slate-200 flex items-center justify-center rounded-xl p-3 shadow-sm">
+              <textarea
+                value={rowHeaders.stages}
+                onChange={e => setRowHeaders(prev => ({ ...prev, stages: e.target.value }))}
+                className="bg-transparent text-center font-bold text-slate-700 outline-none w-full resize-none overflow-hidden"
+                rows={rowHeaders.stages.split('\n').length || 1}
+              />
             </div>
             {groupedStages.map(group => (
               <div key={group.id} style={{ gridColumn: `span ${group.count}` }} className="bg-slate-100 border border-slate-200 p-3 rounded-xl flex items-center justify-center shadow-sm">
@@ -405,10 +587,15 @@ export default function App() {
             </div>
 
             {/* Row 2: Behaviors */}
-            <div className="bg-slate-100 border border-slate-200 flex items-center justify-center font-bold rounded-xl p-3 text-center text-slate-700 shadow-sm">
-              操作行为
+            <div className="bg-slate-100 border border-slate-200 flex items-center justify-center rounded-xl p-3 shadow-sm">
+              <textarea
+                value={rowHeaders.behaviors}
+                onChange={e => setRowHeaders(prev => ({ ...prev, behaviors: e.target.value }))}
+                className="bg-transparent text-center font-bold text-slate-700 outline-none w-full resize-none overflow-hidden"
+                rows={rowHeaders.behaviors.split('\n').length || 1}
+              />
             </div>
-            {steps.map(step => (
+            {steps.map((step, index) => (
               <div key={step.id} className="bg-white border border-slate-200 p-3 rounded-xl flex items-center justify-center shadow-sm relative group">
                 <input
                   value={step.behaviorName}
@@ -423,20 +610,33 @@ export default function App() {
                   className="absolute right-0 top-0 bottom-0 w-3 cursor-col-resize hover:bg-indigo-500/20 z-10 rounded-r-xl"
                   onPointerDown={(e) => handleResizeStart(e, step.id)}
                 />
+                {index < steps.length - 1 && (
+                  <div className="absolute -right-[9px] top-2 bottom-2 w-px border-r-2 border-dashed border-slate-300 pointer-events-none" />
+                )}
               </div>
             ))}
 
             {/* Row 3: Ideal Emotion */}
-            <div className="bg-blue-50 border border-blue-100 flex items-center justify-center font-bold rounded-xl p-3 text-center text-blue-800 shadow-sm">
-              理想<br/>用户情绪
+            <div className="bg-blue-50 border border-blue-100 flex items-center justify-center rounded-xl p-3 shadow-sm">
+              <textarea
+                value={rowHeaders.idealEmotions}
+                onChange={e => setRowHeaders(prev => ({ ...prev, idealEmotions: e.target.value }))}
+                className="bg-transparent text-center font-bold text-blue-800 outline-none w-full resize-none overflow-hidden"
+                rows={rowHeaders.idealEmotions.split('\n').length || 1}
+              />
             </div>
             <div style={{ gridColumn: `span ${steps.length}` }} className="bg-slate-50/50 rounded-xl border border-slate-200">
               <EmotionGraph nodes={idealEmotions} setNodes={setIdealEmotions} type="ideal" />
             </div>
 
             {/* Row 4: Problems */}
-            <div className="bg-orange-50 border border-orange-100 flex items-center justify-center font-bold rounded-xl p-3 text-center text-orange-800 shadow-sm">
-              问题<br/>梳理
+            <div className="bg-orange-50 border border-orange-100 flex items-center justify-center rounded-xl p-3 shadow-sm">
+              <textarea
+                value={rowHeaders.problems}
+                onChange={e => setRowHeaders(prev => ({ ...prev, problems: e.target.value }))}
+                className="bg-transparent text-center font-bold text-orange-800 outline-none w-full resize-none overflow-hidden"
+                rows={rowHeaders.problems.split('\n').length || 1}
+              />
             </div>
             {steps.map(step => (
               <div key={`prob-${step.id}`} className="bg-white border border-slate-200 p-4 rounded-xl flex gap-3 overflow-x-auto shadow-sm min-h-[220px] items-start custom-scrollbar relative">
@@ -478,8 +678,13 @@ export default function App() {
             ))}
 
             {/* Row 5: Touchpoints */}
-            <div className="bg-emerald-50 border border-emerald-100 flex items-center justify-center font-bold rounded-xl p-3 text-center text-emerald-800 shadow-sm">
-              触点<br/>现状
+            <div className="bg-emerald-50 border border-emerald-100 flex items-center justify-center rounded-xl p-3 shadow-sm">
+              <textarea
+                value={rowHeaders.touchpoints}
+                onChange={e => setRowHeaders(prev => ({ ...prev, touchpoints: e.target.value }))}
+                className="bg-transparent text-center font-bold text-emerald-800 outline-none w-full resize-none overflow-hidden"
+                rows={rowHeaders.touchpoints.split('\n').length || 1}
+              />
             </div>
             {steps.map(step => (
               <div key={`tp-${step.id}`} className="bg-white border border-slate-200 p-4 rounded-xl flex gap-3 overflow-x-auto shadow-sm min-h-[440px] items-start custom-scrollbar relative">
@@ -508,8 +713,13 @@ export default function App() {
             ))}
 
             {/* Row 6: Current Emotion */}
-            <div className="bg-purple-50 border border-purple-100 flex items-center justify-center font-bold rounded-xl p-3 text-center text-purple-800 shadow-sm">
-              现状<br/>用户情绪
+            <div className="bg-purple-50 border border-purple-100 flex items-center justify-center rounded-xl p-3 shadow-sm">
+              <textarea
+                value={rowHeaders.currentEmotions}
+                onChange={e => setRowHeaders(prev => ({ ...prev, currentEmotions: e.target.value }))}
+                className="bg-transparent text-center font-bold text-purple-800 outline-none w-full resize-none overflow-hidden"
+                rows={rowHeaders.currentEmotions.split('\n').length || 1}
+              />
             </div>
             <div style={{ gridColumn: `span ${steps.length}` }} className="bg-slate-50/50 rounded-xl border border-slate-200">
               <EmotionGraph nodes={currentEmotions} setNodes={setCurrentEmotions} type="current" />
